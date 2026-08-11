@@ -5,7 +5,17 @@
 Check whether your IP is in a country or territory that OpenAI serves.
 
 ```shell
-bash <(curl -Ls https://cdn.jsdelivr.net/gh/liandu2024/OpenAI-Checker/openai.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/liandu2024/OpenAI-Checker/main/openai.sh)
+```
+
+If `raw.githubusercontent.com` is blocked on your network, use the CDN instead.
+That URL is pinned to a release on purpose: jsdelivr caches an unpinned path for
+up to seven days *per edge node*, and a purge does not reliably reach all of
+them — two machines fetching the same unpinned URL can get different builds.
+A pinned path is immutable, so it is never stale.
+
+```shell
+bash <(curl -Ls https://cdn.jsdelivr.net/gh/liandu2024/OpenAI-Checker@v2.1.0/openai.sh)
 ```
 
 ## Detection method

@@ -186,11 +186,22 @@ bash "$SH" >/dev/null 2>&1;        chk "normal run"      "$?" "0"
 bash "$SH" --bogus >/dev/null 2>&1; chk "bad option"      "$?" "1"
 chk "no ANSI when piped" "$(bash "$SH" 2>/dev/null | grep -c $'\033')" "0"
 
-# The install one-liner must point at this repo, not at whatever it was forked
+# The install one-liners must point at this repo, not at whatever it was forked
 # from — otherwise users run a different script than the one being tested here.
 SLUG=$(grep -oE 'github\.com/[A-Za-z0-9_.-]+/OpenAI-Checker' "$SH" | head -1 | cut -d/ -f2-)
-CDN=$(grep -oE 'cdn\.jsdelivr\.net/gh/[A-Za-z0-9_.-]+/OpenAI-Checker' "$REPO/README.md" | head -1 | cut -d/ -f3-)
-chk "README install URL matches the script's own repo" "$CDN" "$SLUG"
+RAWSLUG=$(grep -oE 'raw\.githubusercontent\.com/[A-Za-z0-9_.-]+/OpenAI-Checker' "$REPO/README.md" \
+          | head -1 | cut -d/ -f2-)
+chk "README install URL matches the script's own repo" "$RAWSLUG" "$SLUG"
+
+# And the CDN URL must be pinned to this exact release. An unpinned jsdelivr
+# path is cached per edge node for up to a week, so two machines can fetch two
+# different builds from the same URL — which is how a fixed bug kept being
+# reported as unfixed. A pin makes the URL immutable; this check makes a release
+# that forgets to move the pin fail instead of silently serving the old build.
+VER=$(grep -oE '^VERSION="[^"]+"' "$SH" | head -1 | cut -d'"' -f2)
+PIN=$(grep -oE 'cdn\.jsdelivr\.net/gh/[A-Za-z0-9_.-]+/OpenAI-Checker@[^/]+' "$REPO/README.md" \
+      | head -1 | sed 's/.*@//')
+chk "README CDN URL is pinned to the current version" "$PIN" "v$VER"
 
 # ---------------------------------------------------------------------------
 head_ "10. Caching, and a clean stderr on a warm cache"
