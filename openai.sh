@@ -37,7 +37,13 @@ IPVERSE_MIRROR="https://cdn.jsdelivr.net/gh/ipverse/rir-ip@master/country"
 GEOIP_URL="https://api.ip.sb/geoip"
 UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-HTTP_TIMEOUT=10
+# --max-time is a budget for the whole transfer, not for the connection, so one
+# value cannot serve both a 3KB docs page and 750KB of range data: 10s is
+# generous for the former and too tight for the latter on a slow link. Fail fast
+# on an unreachable host, but stay patient with one that is merely slow.
+HTTP_CONNECT_TIMEOUT=10
+HTTP_MAX_TIME=90         # bulk range data, ~750KB
+HTTP_MAX_TIME_SMALL=20   # trace and geoip, a few hundred bytes each
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/openai-checker"
 CACHE_TTL=86400          # 24h
 USE_CACHE=1
@@ -126,7 +132,8 @@ fetch_cached() {
 
     for u in "$url" "$mirror"; do
         [ -n "$u" ] || continue
-        if curl -fsSL --max-time "$HTTP_TIMEOUT" --retry 1 -A "$UA" \
+        if curl -fsSL --connect-timeout "$HTTP_CONNECT_TIMEOUT" \
+                --max-time "$HTTP_MAX_TIME" --retry 1 -A "$UA" \
                 -o "$tmp" "$u" 2>/dev/null && [ -s "$tmp" ]; then
             mv -f "$tmp" "$dest" 2>/dev/null && { printf '%s\n' "$dest"; return 0; }
         fi
@@ -531,7 +538,8 @@ json_str() {
 trace() {
     local fam=$1 host out ip loc
     for host in $TRACE_HOSTS; do
-        out=$(curl -fsS "-$fam" --max-time "$HTTP_TIMEOUT" \
+        out=$(curl -fsS "-$fam" --connect-timeout "$HTTP_CONNECT_TIMEOUT" \
+                   --max-time "$HTTP_MAX_TIME_SMALL" \
                    "https://$host/cdn-cgi/trace" 2>/dev/null) || continue
         ip=$(LC_ALL=C awk -F= '$1 == "ip"  { print $2; exit }' <<<"$out")
         loc=$(LC_ALL=C awk -F= '$1 == "loc" { print $2; exit }' <<<"$out")
@@ -543,7 +551,8 @@ trace() {
 # geoip <ip> <4|6> -> "<org><TAB><country code>" from an independent provider.
 geoip() {
     local ip=$1 fam=$2 json org cc
-    json=$(curl -fsS "-$fam" --max-time "$HTTP_TIMEOUT" -A "$UA" \
+    json=$(curl -fsS "-$fam" --connect-timeout "$HTTP_CONNECT_TIMEOUT" \
+                --max-time "$HTTP_MAX_TIME_SMALL" -A "$UA" \
                 "$GEOIP_URL/$ip" 2>/dev/null) || json=""
     [ -n "$json" ] || return 1
     org=$(json_str "$json" organization)

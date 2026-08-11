@@ -222,6 +222,38 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+head_ "11. Transfer budget"
+# ---------------------------------------------------------------------------
+# curl's --max-time covers the whole transfer, not just the connection, so a
+# single value cannot serve both a 3KB docs page and 750KB of range data. When
+# it was one shared 10s budget, the range check failed on any link slower than
+# ~75KB/s while the three small requests kept working — which reads as "range
+# data unavailable" and nothing else.
+CT=$(bash -c "source '$WORK/lib.sh' >/dev/null 2>&1; echo \${HTTP_CONNECT_TIMEOUT:-}")
+MT=$(bash -c "source '$WORK/lib.sh' >/dev/null 2>&1; echo \${HTTP_MAX_TIME:-}")
+BYTES=$(bash -c "source '$WORK/lib.sh' >/dev/null 2>&1
+                 CACHE_DIR='$WORK'; ip_in_country 8.8.8.8 US 4 >/dev/null 2>&1
+                 wc -c < '$WORK/cidr-us.json' 2>/dev/null || echo 0")
+
+if [ -n "$CT" ] && [ -n "$MT" ]; then
+    ok "connect timeout ($CT s) is separate from the transfer budget ($MT s)"
+else
+    no "connect timeout and transfer budget are not configured separately"
+fi
+
+# The budget has to clear the real payload at a pessimistic link speed.
+if [ "${BYTES:-0}" -gt 0 ] && [ "${MT:-0}" -gt 0 ]; then
+    NEED=$(( BYTES / 25000 + 1 ))     # seconds at a slow-but-usable 25KB/s
+    if [ "$MT" -ge "$NEED" ]; then
+        ok "budget covers ${BYTES}B at 25KB/s (needs ${NEED}s, has ${MT}s)"
+    else
+        no "budget too tight: ${BYTES}B needs ~${NEED}s at 25KB/s, only ${MT}s allowed"
+    fi
+else
+    note "payload size unavailable, budget not checked"
+fi
+
+# ---------------------------------------------------------------------------
 printf '\n%s────────────────────────────────────────%s\n' "$B" "$P"
 printf '  %sPASS %s%s    %sFAIL %s%s\n' "$G" "$PASS" "$P" "$R" "$FAIL" "$P"
 if [ "$FAIL" -eq 0 ]; then
