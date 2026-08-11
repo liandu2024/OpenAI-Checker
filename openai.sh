@@ -122,7 +122,7 @@ file_age() {
 # Prints the path to the downloaded file. Tries the mirror if the primary fails,
 # then a stale cache entry, before giving up.
 fetch_cached() {
-    local url=$1 key=$2 mirror=${3:-} dest tmp u crc
+    local url=$1 key=$2 mirror=${3:-} dest tmp u crc sz
 
     dest="$CACHE_DIR/$key"
 
@@ -141,7 +141,13 @@ fetch_cached() {
              --max-time "$HTTP_MAX_TIME" --retry 1 -A "$UA" \
              -o "$tmp" "$u" 2>/dev/null
         crc=$?
-        dbg "  curl exit=$crc wrote=$(wc -c < "$tmp" 2>/dev/null || echo 0)B  $u"
+        # Sized only when tracing: the redirection itself errors on a missing
+        # file, and the substitution would run regardless of whether dbg prints.
+        if [ "${DEBUG:-0}" -eq 1 ]; then
+            sz=0
+            [ -f "$tmp" ] && sz=$(wc -c < "$tmp" 2>/dev/null)
+            dbg "  curl exit=$crc wrote=${sz}B  $u"
+        fi
         if [ "$crc" -eq 0 ] && [ -s "$tmp" ]; then
             if mv -f "$tmp" "$dest" 2>/dev/null; then
                 printf '%s\n' "$dest"
@@ -471,7 +477,7 @@ ip_in_country() {
         dbg "  fetch failed: $IPVERSE_BASE/$lc/aggregated.json"
         return 2
     fi
-    dbg "  data file: $f ($(wc -c < "$f" 2>/dev/null) bytes)"
+    [ "$DEBUG" -eq 1 ] && dbg "  data file: $f ($(wc -c < "$f" 2>/dev/null) bytes)"
 
     if [ "$fam" = "4" ]; then
         # [.] and [/] rather than \. and \/ — a bracket expression means the
@@ -479,6 +485,11 @@ ip_in_country() {
         # before an ordinary character inside a regex literal is not portable.
         LC_ALL=C awk -v TARGET="$ip" '
             BEGIN {
+                # Repeated multiplication rather than 2^n: BusyBox awk is
+                # commonly built without math support, where ^ fails outright
+                # and every prefix then compares as a miss.
+                POW[0] = 1
+                for (i = 1; i <= 32; i++) POW[i] = POW[i - 1] * 2
                 split(TARGET, t, ".")
                 tv = ((t[1] * 256 + t[2]) * 256 + t[3]) * 256 + t[4]
             }
@@ -491,7 +502,7 @@ ip_in_country() {
                     split(tok, p, "/")
                     split(p[1], a, ".")
                     base = ((a[1] * 256 + a[2]) * 256 + a[3]) * 256 + a[4]
-                    if (tv >= base && tv < base + 2 ^ (32 - p[2])) { found = 1; exit }
+                    if (tv >= base && tv < base + POW[32 - p[2]]) { found = 1; exit }
                 }
             }
             END { exit(found ? 0 : (seen ? 1 : 2)) }
