@@ -88,9 +88,16 @@ die() { bad "$*" >&2; exit 1; }
 file_age() {
     local f=$1 mt now
     [ -f "$f" ] || { echo 999999999; return 0; }
-    mt=$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null) || {
-        echo 999999999; return 0
-    }
+
+    # GNU/BusyBox form first, then BSD/macOS — and validate, don't trust the
+    # exit status. GNU stat reads -f as "filesystem status" rather than as a
+    # format flag, so `stat -f %m` there does not cleanly fail: it writes an
+    # unrelated block starting with `File: "..."` to stdout. Chaining the two
+    # with || concatenated both outputs into what was then used as an integer.
+    mt=$(stat -c %Y "$f" 2>/dev/null)
+    case "$mt" in ''|*[!0-9]*) mt=$(stat -f %m "$f" 2>/dev/null);; esac
+    case "$mt" in ''|*[!0-9]*) echo 999999999; return 0;; esac
+
     now=$(date +%s)
     echo $(( now - mt ))
 }

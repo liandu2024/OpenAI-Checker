@@ -183,6 +183,35 @@ CDN=$(grep -oE 'cdn\.jsdelivr\.net/gh/[A-Za-z0-9_.-]+/OpenAI-Checker' "$REPO/REA
 chk "README install URL matches the script's own repo" "$CDN" "$SLUG"
 
 # ---------------------------------------------------------------------------
+head_ "10. Caching, and a clean stderr on a warm cache"
+# ---------------------------------------------------------------------------
+# Regression guard. `stat` differs between GNU and BSD, and a wrong probe there
+# fails in a way that keeps the exit status at 0 while writing errors to stderr
+# and silently disabling the cache — invisible to any check that only looks at
+# exit codes, and invisible on a cold cache, since the age of a file that does
+# not exist is never computed.
+CACHEROOT="$WORK/xdg"
+rm -rf "$CACHEROOT"
+XDG_CACHE_HOME="$CACHEROOT" bash "$SH" >/dev/null 2>&1        # populate
+CACHED="$CACHEROOT/openai-checker/supported-countries.md"
+
+if [ -f "$CACHED" ]; then
+    ok "cache populated on the first run"
+
+    MARK="$WORK/mark"; : > "$MARK"
+    ERR=$(XDG_CACHE_HOME="$CACHEROOT" bash "$SH" 2>&1 >/dev/null)
+    chk "second run writes nothing to stderr" "$ERR" ""
+
+    if [ -n "$(find "$CACHED" -newer "$MARK" 2>/dev/null)" ]; then
+        no "cache not honoured — the second run refetched"
+    else
+        ok "cache honoured on the second run"
+    fi
+else
+    no "cache was never populated ($CACHED absent)"
+fi
+
+# ---------------------------------------------------------------------------
 printf '\n%s────────────────────────────────────────%s\n' "$B" "$P"
 printf '  %sPASS %s%s    %sFAIL %s%s\n' "$G" "$PASS" "$P" "$R" "$FAIL" "$P"
 if [ "$FAIL" -eq 0 ]; then
