@@ -51,6 +51,30 @@ jobs:
           # supported regions, so anything else is a real failure.
           [ "${rc:-0}" = "0" ] || { echo "unexpected exit ${rc}"; exit 1; }
 
+  # Routers, NAS boxes and minimal containers run BusyBox awk, and it is stricter
+  # than either awk the matrix above covers. A regex literal containing \/ works
+  # on gawk and BWK awk and silently matches nothing here, which surfaced only as
+  # "range data unavailable" on a user's OpenWrt router.
+  busybox-awk:
+    name: busybox awk
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install BusyBox and shadow awk with it
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq busybox-static
+          mkdir -p "$HOME/bbin"
+          printf '#!/bin/sh\nexec busybox awk "$@"\n' > "$HOME/bbin/awk"
+          chmod +x "$HOME/bbin/awk"
+          PATH="$HOME/bbin:$PATH" awk 'BEGIN { print "awk in use:" }'
+          busybox 2>&1 | head -1
+      - name: Run verification suite under BusyBox awk
+        env:
+          NO_COLOR: '1'
+        run: PATH="$HOME/bbin:$PATH" /bin/bash verify.sh
+
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest
@@ -66,7 +90,7 @@ jobs:
   # does not reach anyone using that command until the cache happens to expire.
   purge-cdn:
     name: purge jsdelivr
-    needs: [verify, shellcheck]
+    needs: [verify, busybox-awk, shellcheck]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
