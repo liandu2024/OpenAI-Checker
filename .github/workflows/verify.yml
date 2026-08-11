@@ -94,13 +94,44 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0        # need the previous commit to diff against
+
+      # jsdelivr throttles purges per file. Firing on every push — including
+      # ones that only touch the workflow or the README — burns the quota, and
+      # then the purge that actually matters is refused.
+      - name: Decide whether a purge is warranted
+        id: check
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "no usable base commit — purging rather than risk a stale CDN"
+            echo "purge=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$BEFORE" "$AFTER" | grep -qx 'openai.sh'; then
+            echo "openai.sh changed"
+            echo "purge=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "openai.sh unchanged — nothing users fetch has moved"
+            echo "purge=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Purge and confirm the CDN serves the new file
+        if: steps.check.outputs.purge == 'true'
         run: |
           set -euo pipefail
           SLUG=${GITHUB_REPOSITORY}
-          curl -sS --max-time 60 "https://purge.jsdelivr.net/gh/${SLUG}/openai.sh"
-          echo
-          for i in $(seq 1 10); do
+          RESP=$(curl -sS --max-time 60 "https://purge.jsdelivr.net/gh/${SLUG}/openai.sh")
+          echo "$RESP"
+          if printf '%s' "$RESP" | grep -q '"throttled": *true'; then
+            echo "::warning::jsdelivr throttled the purge; the CDN will catch up on its own TTL"
+            exit 0
+          fi
+          for i in $(seq 1 8); do
             sleep 15
             curl -fsSL --max-time 30 "https://cdn.jsdelivr.net/gh/${SLUG}/openai.sh" -o cdn.sh
             curl -fsSL --max-time 30 "https://raw.githubusercontent.com/${SLUG}/main/openai.sh" -o raw.sh
