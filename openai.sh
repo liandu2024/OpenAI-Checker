@@ -9,7 +9,8 @@
 #   2. fetches OpenAI's current list of supported countries and territories
 #      -> https://developers.openai.com/api/docs/supported-countries.md
 #   3. cross-checks the IP against that country's registered ranges
-#      -> https://github.com/ipverse/rir-ip  (RIR delegation data)
+#      -> https://github.com/ipverse/rir-ip  (RIR delegation data, with a CDN
+#         fallback for networks that cannot reach raw.githubusercontent.com)
 #
 # A baked-in snapshot of (2) is used only if the live fetch fails, and the
 # output says so rather than silently pretending to be current.
@@ -29,6 +30,10 @@ VERSION="2.0.0"
 TRACE_HOSTS="chatgpt.com chat.openai.com"
 OPENAI_DOCS_URL="https://developers.openai.com/api/docs/supported-countries.md"
 IPVERSE_BASE="https://raw.githubusercontent.com/ipverse/rir-ip/master/country"
+# Same repository via a CDN, for networks that cannot reach raw.githubusercontent
+# .com. Only the range data has a fallback: losing it costs a cross-check, and
+# it is the one source that is commonly unreachable while the others are fine.
+IPVERSE_MIRROR="https://cdn.jsdelivr.net/gh/ipverse/rir-ip@master/country"
 GEOIP_URL="https://api.ip.sb/geoip"
 UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
@@ -102,11 +107,11 @@ file_age() {
     echo $(( now - mt ))
 }
 
-# fetch_cached <url> <cache-key>
-# Prints the path to the downloaded file. Falls back to a stale cache entry
-# before giving up.
+# fetch_cached <url> <cache-key> [mirror-url]
+# Prints the path to the downloaded file. Tries the mirror if the primary fails,
+# then a stale cache entry, before giving up.
 fetch_cached() {
-    local url=$1 key=$2 dest tmp
+    local url=$1 key=$2 mirror=${3:-} dest tmp u
 
     dest="$CACHE_DIR/$key"
 
@@ -119,10 +124,13 @@ fetch_cached() {
     mkdir -p "$CACHE_DIR" 2>/dev/null || true
     tmp="$dest.$$.tmp"
 
-    if curl -fsSL --max-time "$HTTP_TIMEOUT" --retry 1 -A "$UA" \
-            -o "$tmp" "$url" 2>/dev/null && [ -s "$tmp" ]; then
-        mv -f "$tmp" "$dest" 2>/dev/null && { printf '%s\n' "$dest"; return 0; }
-    fi
+    for u in "$url" "$mirror"; do
+        [ -n "$u" ] || continue
+        if curl -fsSL --max-time "$HTTP_TIMEOUT" --retry 1 -A "$UA" \
+                -o "$tmp" "$u" 2>/dev/null && [ -s "$tmp" ]; then
+            mv -f "$tmp" "$dest" 2>/dev/null && { printf '%s\n' "$dest"; return 0; }
+        fi
+    done
 
     rm -f "$tmp" 2>/dev/null || true
     [ -f "$dest" ] && { printf '%s\n' "$dest"; return 0; }   # stale beats nothing
@@ -427,7 +435,8 @@ ip_in_country() {
     lc=$(printf '%s' "$cc" | LC_ALL=C tr '[:upper:]' '[:lower:]')
     case "$lc" in [a-z][a-z]) ;; *) return 2;; esac
 
-    f=$(fetch_cached "$IPVERSE_BASE/$lc/aggregated.json" "cidr-$lc.json") || return 2
+    f=$(fetch_cached "$IPVERSE_BASE/$lc/aggregated.json" "cidr-$lc.json" \
+                     "$IPVERSE_MIRROR/$lc/aggregated.json") || return 2
 
     if [ "$fam" = "4" ]; then
         LC_ALL=C awk -v TARGET="$ip" '

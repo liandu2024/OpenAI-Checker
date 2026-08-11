@@ -20,7 +20,9 @@ Nothing about OpenAI's policy is baked into this script. On every run it:
    No hand-maintained country list to fall out of date.
 3. **Cross-checks the IP against that country's registered ranges**, using RIR
    delegation data from [ipverse/rir-ip](https://github.com/ipverse/rir-ip).
-   Only the one country's ranges are downloaded, not all of them.
+   Only the one country's ranges are downloaded, not all of them. This is the
+   one source with a CDN fallback, since `raw.githubusercontent.com` is
+   frequently unreachable on networks where everything else works fine.
 
 Three independent signals, reported separately. When they disagree — a common
 sign of a VPN, relay or anycast address — the script says so instead of quietly

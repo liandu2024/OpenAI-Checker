@@ -148,6 +148,16 @@ else
     note "negative case inconclusive (rc=$CN)"
 fi
 
+# The CDN mirror has to actually serve this data, not merely be configured —
+# it is the only path to the range check on networks that cannot reach
+# raw.githubusercontent.com, which is where this check matters most.
+MIRROR=$(bash -c "
+    source '$WORK/lib.sh' >/dev/null 2>&1
+    IPVERSE_BASE='https://raw.githubusercontent.invalid/unreachable'
+    CACHE_DIR='$WORK/mirroronly'
+    ip_in_country 8.8.8.8 US 4; echo \$?")
+chk "falls back to the CDN mirror when the primary is unreachable" "$MIRROR" "0"
+
 # ---------------------------------------------------------------------------
 head_ "7. Verdicts"
 # ---------------------------------------------------------------------------
