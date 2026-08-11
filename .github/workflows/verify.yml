@@ -60,3 +60,30 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
       - name: Lint
         run: shellcheck --severity=warning openai.sh verify.sh
+
+  # The install one-liner in the README points at an unversioned jsdelivr URL,
+  # which the CDN caches for up to 7 days. Without this, a push fixing a bug
+  # does not reach anyone using that command until the cache happens to expire.
+  purge-cdn:
+    name: purge jsdelivr
+    needs: [verify, shellcheck]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Purge and confirm the CDN serves the new file
+        run: |
+          set -euo pipefail
+          SLUG=${GITHUB_REPOSITORY}
+          curl -sS --max-time 60 "https://purge.jsdelivr.net/gh/${SLUG}/openai.sh"
+          echo
+          for i in $(seq 1 10); do
+            sleep 15
+            curl -fsSL --max-time 30 "https://cdn.jsdelivr.net/gh/${SLUG}/openai.sh" -o cdn.sh
+            curl -fsSL --max-time 30 "https://raw.githubusercontent.com/${SLUG}/main/openai.sh" -o raw.sh
+            if cmp -s cdn.sh raw.sh; then
+              echo "CDN is serving the current file (attempt $i)"
+              exit 0
+            fi
+            echo "attempt $i: CDN still stale ($(wc -c < cdn.sh) vs $(wc -c < raw.sh) bytes)"
+          done
+          echo "::warning::jsdelivr still stale after purge; it will catch up on its own TTL"
