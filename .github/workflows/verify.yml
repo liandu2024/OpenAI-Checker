@@ -1,0 +1,62 @@
+name: verify
+
+# This suite mostly watches upstream data, not this repo's code. OpenAI can add
+# a country, rename one, or restructure its docs page at any time, and the first
+# sign would be users being told their region is unsupported. The weekly run is
+# the alarm for that.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 4 * * 1'      # Mondays 04:17 UTC
+  workflow_dispatch:
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # bash 5 + GNU coreutils/gawk
+          - os: ubuntu-latest
+            label: linux
+          # bash 3.2 + BSD coreutils + BWK awk — the combination macOS ships,
+          # and the one that has already caught an awk -v portability bug.
+          - os: macos-latest
+            label: macos-bash3.2
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show interpreter versions
+        run: |
+          /bin/bash --version | head -1
+          awk --version 2>/dev/null | head -1 || echo "awk: BWK/BSD (no --version)"
+
+      - name: Run verification suite
+        env:
+          NO_COLOR: '1'
+        run: /bin/bash verify.sh
+
+      - name: Run the checker itself
+        env:
+          NO_COLOR: '1'
+        run: |
+          /bin/bash openai.sh || rc=$?
+          # 0 supported, 1 not supported, 2 undetermined. Runners are in
+          # supported regions, so anything else is a real failure.
+          [ "${rc:-0}" = "0" ] || { echo "unexpected exit ${rc}"; exit 1; }
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+      - name: Lint
+        run: shellcheck --severity=warning openai.sh verify.sh

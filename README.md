@@ -1,5 +1,7 @@
 # OpenAI-Checker
 
+[![verify](https://github.com/liandu2024/OpenAI-Checker/actions/workflows/verify.yml/badge.svg)](https://github.com/liandu2024/OpenAI-Checker/actions/workflows/verify.yml)
+
 Check whether your IP is in a country or territory that OpenAI serves.
 
 ```shell
@@ -82,6 +84,17 @@ and later.
 region and nothing else. OpenAI gates access on the account's signup country,
 phone number and payment method as well — an IP in a supported region is
 necessary, not sufficient.
+
+## Development
+
+`verify.sh` is the test suite. Most of what it checks is upstream data rather
+than this repo's code — OpenAI can add a country, rename one, or restructure its
+docs page at any time, and the first symptom would be users being told their
+region is unsupported. CI runs it weekly for exactly that reason.
+
+```shell
+bash verify.sh
+```
 
 ## Credits
 

@@ -382,6 +382,8 @@ load_supported() {
         UNMAPPED=$(printf '%s\n' "$mapped" | sed -n "s/^?$TAB//p")
     else
         LIST_MODE="snapshot"
+        # shellcheck disable=SC2086  # unquoted on purpose: split the snapshot
+        # blob on whitespace into one code per line.
         SUPPORTED_MAP=$(printf '%s\n' $SNAPSHOT_CODES | grep -E '^[A-Z]{2}$')
         UNMAPPED=""
     fi
@@ -556,8 +558,8 @@ check_family() {
         return 0
     fi
 
-    ip=${t%%$TAB*}
-    loc=${t##*$TAB}
+    ip=${t%%"$TAB"*}
+    loc=${t##*"$TAB"}
 
     if [ "$fam" = "6" ] && ! is_real_ipv6 "$ip"; then
         dim "  no native $label — the edge saw $ip (v4 tunnel or proxy); skipped"
@@ -568,8 +570,8 @@ check_family() {
 
     org=""; geo_cc=""
     if g=$(geoip "$ip" "$fam"); then
-        org=${g%%$TAB*}
-        geo_cc=${g##*$TAB}
+        org=${g%%"$TAB"*}
+        geo_cc=${g##*"$TAB"}
     fi
 
     if [ -n "$org" ]; then
