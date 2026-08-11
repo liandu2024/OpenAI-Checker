@@ -70,6 +70,7 @@ LIST_MODE="snapshot"
 UNMAPPED=""
 EXIT_CODE=0
 ANY_FAMILY=0
+DEBUG=0
 
 # ---------------------------------------------------------------- output ----
 
@@ -94,6 +95,10 @@ row() { printf '  %s%-13s%s %s\n' "$DIM" "$1" "$PLAIN" "$2"; }
 
 die() { bad "$*" >&2; exit 1; }
 
+# Diagnostics go to stderr so they never contaminate the paths and values that
+# callers read from stdout. Always returns 0 — this must not steer control flow.
+dbg() { [ "${DEBUG:-0}" -eq 1 ] && printf '[debug] %s\n' "$*" >&2; return 0; }
+
 # ----------------------------------------------------------------- cache ----
 
 file_age() {
@@ -117,7 +122,7 @@ file_age() {
 # Prints the path to the downloaded file. Tries the mirror if the primary fails,
 # then a stale cache entry, before giving up.
 fetch_cached() {
-    local url=$1 key=$2 mirror=${3:-} dest tmp u
+    local url=$1 key=$2 mirror=${3:-} dest tmp u crc
 
     dest="$CACHE_DIR/$key"
 
@@ -132,12 +137,22 @@ fetch_cached() {
 
     for u in "$url" "$mirror"; do
         [ -n "$u" ] || continue
-        if curl -fsSL --connect-timeout "$HTTP_CONNECT_TIMEOUT" \
-                --max-time "$HTTP_MAX_TIME" --retry 1 -A "$UA" \
-                -o "$tmp" "$u" 2>/dev/null && [ -s "$tmp" ]; then
-            mv -f "$tmp" "$dest" 2>/dev/null && { printf '%s\n' "$dest"; return 0; }
+        curl -fsSL --connect-timeout "$HTTP_CONNECT_TIMEOUT" \
+             --max-time "$HTTP_MAX_TIME" --retry 1 -A "$UA" \
+             -o "$tmp" "$u" 2>/dev/null
+        crc=$?
+        dbg "  curl exit=$crc wrote=$(wc -c < "$tmp" 2>/dev/null || echo 0)B  $u"
+        if [ "$crc" -eq 0 ] && [ -s "$tmp" ]; then
+            if mv -f "$tmp" "$dest" 2>/dev/null; then
+                printf '%s\n' "$dest"
+                return 0
+            fi
+            dbg "  mv failed: $tmp -> $dest"
         fi
     done
+
+    dbg "  all sources failed for $key; free space below:"
+    [ "${DEBUG:-0}" -eq 1 ] && df -k "$CACHE_DIR" >&2 2>/dev/null
 
     rm -f "$tmp" 2>/dev/null || true
     [ -f "$dest" ] && { printf '%s\n' "$dest"; return 0; }   # stale beats nothing
@@ -437,15 +452,31 @@ code2name() {
 # soon as it finds a match, which would SIGPIPE the writer and — under
 # pipefail — mask the result as a pipeline failure.
 ip_in_country() {
-    local ip=$1 cc=$2 fam=$3 lc f
+    local ip=$1 cc=$2 fam=$3 lc f rc
 
-    lc=$(printf '%s' "$cc" | LC_ALL=C tr '[:upper:]' '[:lower:]')
-    case "$lc" in [a-z][a-z]) ;; *) return 2;; esac
+    # Ranges rather than the [:upper:]/[:lower:] classes: every tr supports
+    # ranges, not every tr supports the classes. ISO 3166-1 codes are ASCII, so
+    # the accent handling those classes would add is not needed here.
+    # shellcheck disable=SC2018,SC2019
+    lc=$(printf '%s' "$cc" | LC_ALL=C tr 'A-Z' 'a-z')
+    dbg "ip_in_country: cc=$cc lc=$lc fam=$fam"
+    case "$lc" in
+        [a-z][a-z]) ;;
+        *) dbg "  lowercase conversion produced [$lc], expected two letters"
+           return 2;;
+    esac
 
-    f=$(fetch_cached "$IPVERSE_BASE/$lc/aggregated.json" "cidr-$lc.json" \
-                     "$IPVERSE_MIRROR/$lc/aggregated.json") || return 2
+    if ! f=$(fetch_cached "$IPVERSE_BASE/$lc/aggregated.json" "cidr-$lc.json" \
+                          "$IPVERSE_MIRROR/$lc/aggregated.json"); then
+        dbg "  fetch failed: $IPVERSE_BASE/$lc/aggregated.json"
+        return 2
+    fi
+    dbg "  data file: $f ($(wc -c < "$f" 2>/dev/null) bytes)"
 
     if [ "$fam" = "4" ]; then
+        # [.] and [/] rather than \. and \/ — a bracket expression means the
+        # literal character in every awk, while the handling of a backslash
+        # before an ordinary character inside a regex literal is not portable.
         LC_ALL=C awk -v TARGET="$ip" '
             BEGIN {
                 split(TARGET, t, ".")
@@ -453,7 +484,7 @@ ip_in_country() {
             }
             {
                 s = $0
-                while (match(s, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+/)) {
+                while (match(s, "[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+/[0-9]+")) {
                     tok = substr(s, RSTART, RLENGTH)
                     s   = substr(s, RSTART + RLENGTH)
                     seen = 1
@@ -465,7 +496,14 @@ ip_in_country() {
             }
             END { exit(found ? 0 : (seen ? 1 : 2)) }
         ' "$f"
-        return $?
+        rc=$?
+        dbg "  ipv4 matcher rc=$rc (0=inside 1=outside 2=no prefixes parsed)"
+        [ "$DEBUG" -eq 1 ] && dbg "  prefixes awk could parse: $(LC_ALL=C awk '
+            { s = $0
+              while (match(s, "[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+/[0-9]+")) {
+                  n++; s = substr(s, RSTART + RLENGTH) } }
+            END { print n + 0 }' "$f")"
+        return $rc
     fi
 
     LC_ALL=C awk -v TARGET="$ip" '
@@ -504,7 +542,7 @@ ip_in_country() {
         }
         {
             s = $0
-            while (match(s, /[0-9a-fA-F:]+\/[0-9]+/)) {
+            while (match(s, "[0-9a-fA-F:]+/[0-9]+")) {
                 tok = substr(s, RSTART, RLENGTH)
                 s   = substr(s, RSTART + RLENGTH)
                 if (index(tok, ":") == 0) continue     # an IPv4 prefix or a bare number
@@ -516,7 +554,9 @@ ip_in_country() {
         }
         END { exit(found ? 0 : (seen ? 1 : 2)) }
     ' "$f"
-    return $?
+    rc=$?
+    dbg "  ipv6 matcher rc=$rc (0=inside 1=outside 2=no prefixes parsed)"
+    return $rc
 }
 
 # -------------------------------------------------------- IP / geo lookup ----
@@ -662,6 +702,7 @@ OpenAI Access Checker
 Usage: openai.sh [options]
 
   --no-cache      ignore the local cache and refetch everything
+  --debug         trace each lookup on stderr
   -h, --help      show this help
   -V, --version   show version
 
@@ -675,6 +716,7 @@ main() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --no-cache)   USE_CACHE=0;;
+            --debug)      DEBUG=1;;
             -h|--help)    setup_colors; usage; exit 0;;
             -V|--version) echo "openai-checker $VERSION"; exit 0;;
             *) setup_colors; die "unknown option: $1  (try --help)";;
